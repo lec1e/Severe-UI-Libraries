@@ -1,3 +1,4 @@
+
 local Library do
     local UserInputService = game:GetService("UserInputService")
     local Players = game:GetService("Players")
@@ -217,18 +218,13 @@ local Library do
     LoadIcons()
 
     -- // Core \\ --
-    -- PreLocal only records draw commands. RunService.Render may call DrawingImmediate and nothing else.
+    -- Render may draw and read Position, CFrame, and LookVector. It still cannot bulk-read or write memory.
     local InFrame = false
     local BoundsCache = {}
-
-    local BuildRects, ReadyRects = {}, {}
-    local BuildTexts, ReadyTexts = {}, {}
-    local BuildMeasures, ReadyMeasures = {}, {}
-    local BuildRectCount, ReadyRectCount = 0, 0
-    local BuildTextCount, ReadyTextCount = 0, 0
-    local BuildMeasureCount, ReadyMeasureCount = 0, 0
     local IconDrawings = {}
     local IconCount = 0
+    local PreparedIcons = {}
+    local WindowBlocked = false
     local ImageNew = type(Image) == "table" and Image.new or nil
     local DrawingNew = type(Drawing) == "table" and Drawing.new or nil
 
@@ -254,9 +250,6 @@ local Library do
     end
 
     local function BeginFrame()
-        BuildRectCount = 0
-        BuildTextCount = 0
-        BuildMeasureCount = 0
         IconCount = 0
     end
 
@@ -267,15 +260,15 @@ local Library do
                 Obj.Visible = false
             end
         end
-        ReadyRects, BuildRects = BuildRects, ReadyRects
-        ReadyRectCount = BuildRectCount
-        ReadyTexts, BuildTexts = BuildTexts, ReadyTexts
-        ReadyTextCount = BuildTextCount
-        ReadyMeasures, BuildMeasures = BuildMeasures, ReadyMeasures
-        ReadyMeasureCount = BuildMeasureCount
-        BuildRectCount = 0
-        BuildTextCount = 0
-        BuildMeasureCount = 0
+    end
+
+    local function SetWindowBlocked(Blocked)
+        Blocked = Blocked == true
+        if WindowBlocked == Blocked then
+            return
+        end
+        WindowBlocked = Blocked
+        pcall(block_roblox_window, Blocked)
     end
 
     local function CreateImage()
@@ -303,8 +296,7 @@ local Library do
         if W < 1 or H < 1 or X ~= X or Y ~= Y or not InFrame then
             return
         end
-        BuildRectCount = BuildRectCount + 1
-        BuildRects[BuildRectCount] = { vector.create(X, Y), vector.create(W, H), AsColor(Color), Opacity or 1 }
+        DrawingImmediate.FilledRectangle(vector.create(X, Y), vector.create(W, H), AsColor(Color), Opacity or 1, 0)
     end
 
     local function DrawText(X, Y, Size, Color, Text, Opacity, Center)
@@ -313,16 +305,15 @@ local Library do
         if X ~= X or Y ~= Y or not InFrame then
             return
         end
-        BuildTextCount = BuildTextCount + 1
-        BuildTexts[BuildTextCount] = {
+        DrawingImmediate.OutlinedText(
             vector.create(X, Y),
             Size or Library.FontSize,
             AsColor(Color),
             Opacity or 1,
             tostring(Text or ""),
             Center == true,
-            Library.Font or "Verdana",
-        }
+            Library.Font or "Verdana"
+        )
     end
 
     local function GetTextBounds(Text, Size)
@@ -338,8 +329,15 @@ local Library do
             end
         end
         if InFrame then
-            BuildMeasureCount = BuildMeasureCount + 1
-            BuildMeasures[BuildMeasureCount] = { Key, Library.Font or "Verdana", Size, Text }
+            local Bounds = DrawingImmediate.GetTextBounds(Library.Font or "Verdana", Size, Text)
+            if Bounds then
+                BoundsCache[Key] = Bounds
+                local Width = Bounds.X or Bounds.x or 0
+                local Height = Bounds.Y or Bounds.y or 0
+                if Width > 0 then
+                    return Vector2New(Width, Height > 0 and Height or (Size + 2))
+                end
+            end
         end
         return Vector2New(math.max(8, #Text * (Size * 0.5)), Size + 2)
     end
@@ -355,23 +353,23 @@ local Library do
         if W < 1 or H < 1 or not InFrame or type(Source) ~= "string" or #Source < 8 then
             return
         end
-        IconCount = IconCount + 1
-        local Obj = IconDrawings[IconCount]
+        local Obj = PreparedIcons[Source]
         if not Obj then
             Obj = CreateImage()
-            IconDrawings[IconCount] = Obj
+            if Obj then
+                Obj.Data = Source
+                PreparedIcons[Source] = Obj
+            end
         end
         if not Obj then
             return
         end
-        local Pos = vector.create(X, Y)
-        local Size = vector.create(W, H)
-        local Tint = Color
+        IconCount = IconCount + 1
+        IconDrawings[IconCount] = Obj
         Obj.Visible = true
-        Obj.Data = Source
-        Obj.Position = Pos
-        Obj.Size = Size
-        Obj.Color = Tint
+        Obj.Position = vector.create(X, Y)
+        Obj.Size = vector.create(W, H)
+        Obj.Color = Color
         Obj.Opacity = Opacity or 1
         Obj.ZIndex = 30000 + IconCount
     end
@@ -3007,6 +3005,17 @@ local Library do
         end
     end
 
+    for _, Raw in pairs(Library.Icons) do
+        if type(Raw) == "string" and #Raw > 8 and not PreparedIcons[Raw] then
+            local Obj = CreateImage()
+            if Obj then
+                Obj.Data = Raw
+                Obj.Visible = false
+                PreparedIcons[Raw] = Obj
+            end
+        end
+    end
+
     -- // Main Render Loop \\ --
 
     Library.MasterVisible = true
@@ -3016,27 +3025,6 @@ local Library do
     Library.SnapGuides = nil
 
     local RenderConnection = RunService.Render:Connect(function()
-        local Measures = ReadyMeasures
-        local MeasureTotal = ReadyMeasureCount
-        for Index = 1, MeasureTotal do
-            local Item = Measures[Index]
-            BoundsCache[Item[1]] = DrawingImmediate.GetTextBounds(Item[2], Item[3], Item[4])
-        end
-        local Rects = ReadyRects
-        local RectTotal = ReadyRectCount
-        for Index = 1, RectTotal do
-            local Rect = Rects[Index]
-            DrawingImmediate.FilledRectangle(Rect[1], Rect[2], Rect[3], Rect[4], 0)
-        end
-        local Texts = ReadyTexts
-        local TextTotal = ReadyTextCount
-        for Index = 1, TextTotal do
-            local Item = Texts[Index]
-            DrawingImmediate.OutlinedText(Item[1], Item[2], Item[3], Item[4], Item[5], Item[6], Item[7])
-        end
-    end)
-
-    local FrameConnection = RunService.PreLocal:Connect(function()
         InFrame = false
         Library:UpdateInput()
         Library.Input.Consumed = false
@@ -3047,6 +3035,7 @@ local Library do
         BeginFrame()
         if not MainWin then
             PublishFrame()
+            SetWindowBlocked(false)
             return
         end
 
@@ -3133,6 +3122,17 @@ local Library do
 
         InFrame = false
         PublishFrame()
+        local MenuOpen = Library.MasterVisible == true
+        if MenuOpen then
+            MenuOpen = false
+            for _, Window in Library.Windows do
+                if Window.Visible then
+                    MenuOpen = true
+                    break
+                end
+            end
+        end
+        SetWindowBlocked(MenuOpen)
     end)
 
     function Library:Unload()
@@ -3143,18 +3143,11 @@ local Library do
                 RenderConnection:Disconnect()
             end)
         end
-        if type(FrameConnection) == "function" then
-            pcall(FrameConnection)
-        elseif type(FrameConnection) == "table" and FrameConnection.Disconnect then
-            pcall(function()
-                FrameConnection:Disconnect()
-            end)
-        end
         RenderConnection = nil
-        FrameConnection = nil
         InFrame = false
         BeginFrame()
         PublishFrame()
+        SetWindowBlocked(false)
     end
 end
 
