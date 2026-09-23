@@ -1,3 +1,4 @@
+
 local Library do
     local UserInputService = game:GetService("UserInputService")
     local Players = game:GetService("Players")
@@ -200,43 +201,35 @@ local Library do
     LoadIcons()
 
     -- // Core \\ --
-    -- Severe only allows DrawingImmediate from the RunService.Render callback.
-    -- Widgets queue commands; that callback submits them itself.
-    local InRender = false
-    local Commands = {}
-    local CommandCount = 0
+    -- RunService.Render may only call DrawingImmediate. Layout runs on PreLocal.
+    local InFrame = false
+    local Rects = {}
+    local RectCount = 0
+    local Texts = {}
+    local TextCount = 0
     local BoundsCache = {}
     local MeasureQueue = {}
     local MeasureCount = 0
 
-    local function QueueCommand(Command)
-        CommandCount = CommandCount + 1
-        Commands[CommandCount] = Command
-    end
-
-    local function FlushDraw()
-        local Font = Library.Font or "Verdana"
-        for i = 1, MeasureCount do
-            local Item = MeasureQueue[i]
-            local Bounds = DrawingImmediate.GetTextBounds(Font, Item[2], Item[3])
-            if Bounds and Bounds.X then
-                BoundsCache[Item[1]] = Bounds
+    local function AsColor(Color)
+        if type(Color) == "vector" then
+            return Color
+        end
+        if type(Color) == "table" then
+            local R = Color.r or Color.R or Color.X
+            local G = Color.g or Color.G or Color.Y
+            local B = Color.b or Color.B or Color.Z
+            if R and G and B then
+                if R > 1 or G > 1 or B > 1 then
+                    return vector.create(R / 255, G / 255, B / 255)
+                end
+                return vector.create(R, G, B)
             end
         end
-        MeasureCount = 0
-
-        for i = 1, CommandCount do
-            local Command = Commands[i]
-            local Kind = Command[1]
-            if Kind == "r" then
-                DrawingImmediate.FilledRectangle(Vector2New(Command[2], Command[3]), Vector2New(Command[4], Command[5]), Command[6], Command[7])
-            elseif Kind == "t" then
-                DrawingImmediate.OutlinedText(Vector2New(Command[2], Command[3]), Command[4], Command[5], Command[7], Command[6], Command[8], Font)
-            elseif Kind == "i" then
-                DrawingImmediate.Image(Command[2], Vector2New(Command[3], Command[4]), Vector2New(Command[5], Command[6]), Command[7], Command[8], false, 0)
-            end
+        if Color and Color.R ~= nil then
+            return vector.create(Color.R, Color.G, Color.B)
         end
-        CommandCount = 0
+        return vector.create(1, 1, 1)
     end
 
     -- // Draw Helpers \\ --
@@ -246,19 +239,29 @@ local Library do
         H = MathFloor(tonumber(H) or 0)
         X = tonumber(X) or 0
         Y = tonumber(Y) or 0
-        if W < 1 or H < 1 or X ~= X or Y ~= Y or not InRender then
+        if W < 1 or H < 1 or X ~= X or Y ~= Y or not InFrame then
             return
         end
-        QueueCommand({ "r", X, Y, W, H, Color, Opacity or 1 })
+        RectCount = RectCount + 1
+        Rects[RectCount] = { vector.create(X, Y), vector.create(W, H), AsColor(Color), Opacity or 1 }
     end
 
     local function DrawText(X, Y, Size, Color, Text, Opacity, Center)
         X = tonumber(X) or 0
         Y = tonumber(Y) or 0
-        if X ~= X or Y ~= Y or not InRender then
+        if X ~= X or Y ~= Y or not InFrame then
             return
         end
-        QueueCommand({ "t", X, Y, Size, Color, tostring(Text or ""), Opacity or 1, Center == true })
+        TextCount = TextCount + 1
+        Texts[TextCount] = {
+            vector.create(X, Y),
+            Size or Library.FontSize,
+            AsColor(Color),
+            Opacity or 1,
+            tostring(Text or ""),
+            Center == true,
+            Library.Font or "Verdana",
+        }
     end
 
     local function GetTextBounds(Text, Size)
@@ -267,24 +270,16 @@ local Library do
         local Key = tostring(Size) .. "\0" .. Text
         local Cached = BoundsCache[Key]
         if Cached then
-            return Cached
+            return Vector2New(Cached.X or Cached.x or 0, Cached.Y or Cached.y or (Size + 2))
         end
-        if InRender then
+        if InFrame then
             MeasureCount = MeasureCount + 1
-            MeasureQueue[MeasureCount] = { Key, Size, Text }
+            MeasureQueue[MeasureCount] = { Key, Library.Font or "Verdana", Size, Text }
         end
         return Vector2New(math.max(8, #Text * (Size * 0.5)), Size + 2)
     end
 
-    local function DrawImage(X, Y, W, H, Source, Color, Opacity)
-        X = tonumber(X) or 0
-        Y = tonumber(Y) or 0
-        W = MathFloor(tonumber(W) or 0)
-        H = MathFloor(tonumber(H) or 0)
-        if type(Source) ~= "string" or Source == "" or W < 1 or H < 1 or not InRender then
-            return
-        end
-        QueueCommand({ "i", Source, X, Y, W, H, Color or Theme["White"], Opacity or 1 })
+    local function DrawImage()
     end
 
     local function DrawBox(X, Y, W, H, Outer, Border, Fill)
@@ -2927,17 +2922,36 @@ local Library do
     Library.SnapGuides = nil
 
     local RenderConnection = RunService.Render:Connect(function()
+        for Index = 1, MeasureCount do
+            local Item = MeasureQueue[Index]
+            BoundsCache[Item[1]] = DrawingImmediate.GetTextBounds(Item[2], Item[3], Item[4])
+        end
+        for Index = 1, RectCount do
+            local Rect = Rects[Index]
+            DrawingImmediate.FilledRectangle(Rect[1], Rect[2], Rect[3], Rect[4], 0)
+        end
+        for Index = 1, TextCount do
+            local Text = Texts[Index]
+            DrawingImmediate.OutlinedText(Text[1], Text[2], Text[3], Text[4], Text[5], Text[6], Text[7])
+        end
+    end)
+
+    local FrameConnection = RunService.PreLocal:Connect(function()
+        InFrame = false
         Library:UpdateInput()
         Library.Input.Consumed = false
         Library.DropdownOverlay = nil
         Library.SnapGuides = nil
 
         local MainWin = Library.Windows[1]
-        if not MainWin then return end
-
-        InRender = true
-        CommandCount = 0
+        RectCount = 0
+        TextCount = 0
         MeasureCount = 0
+        if not MainWin then
+            return
+        end
+
+        InFrame = true
 
         local MenuKey = MainWin.MenuToggleKey or "RightShift"
         local PressedKeys = getpressedkeys() or { }
@@ -3018,8 +3032,7 @@ local Library do
             end
         end
 
-        InRender = false
-        FlushDraw()
+        InFrame = false
     end)
 
     function Library:Unload()
@@ -3027,8 +3040,13 @@ local Library do
             RenderConnection:Disconnect()
             RenderConnection = nil
         end
-        InRender = false
-        CommandCount = 0
+        if FrameConnection then
+            FrameConnection:Disconnect()
+            FrameConnection = nil
+        end
+        InFrame = false
+        RectCount = 0
+        TextCount = 0
         MeasureCount = 0
     end
 end
