@@ -165,7 +165,7 @@ local Library do
             local TTFPath = Library.Folders.Fonts .. "/" .. Name .. ".bin"
 
             if not fs.file(TTFPath) then
-                local Body = http.get({ url = Url })
+                local Body = http.get(Url)
                 fs.write(TTFPath, Body)
             end
 
@@ -192,30 +192,46 @@ local Library do
 
     Library.Icons = { }
 
+    local function TakeBytes(Value)
+        if type(Value) == "buffer" then
+            local Ok, Text = pcall(buffer.tostring, Value)
+            Value = Ok and Text or nil
+        end
+        if type(Value) == "string" and #Value > 24 and string.byte(Value, 1) == 137 and Value:sub(2, 4) == "PNG" then
+            return Value
+        end
+    end
+
+    local function FetchBytes(Url)
+        if type(http) ~= "table" or type(http.get) ~= "function" then
+            return nil
+        end
+        local Ok, Body = pcall(http.get, Url)
+        local Text = Ok and TakeBytes(Body)
+        if Text then
+            return Text
+        end
+        Ok, Body = pcall(function()
+            return http.get({ url = Url })
+        end)
+        return Ok and TakeBytes(Body) or nil
+    end
+
     local function LoadIcons()
         for Name, Url in pairs(IconUrls) do
-            local ImagePath = Library.Folders.Images .. "/" .. Name .. ".png"
-
-            if not fs.file(ImagePath) then
-                fs.write(ImagePath, http.get({ url = Url }))
-            end
-
-            local function AsBytes(Value)
-                if type(Value) == "buffer" then
-                    local Ok, Text = pcall(buffer.tostring, Value)
-                    Value = Ok and Text or nil
-                end
-                if type(Value) == "string" and #Value > 8 then
-                    return Value
-                end
-            end
-
-            local Raw = AsBytes(fs.read(ImagePath))
-            if not Raw then
-                local Body = http.get({ url = Url })
-                Raw = AsBytes(Body)
-                if Raw then
-                    fs.write(ImagePath, Raw)
+            local Raw = FetchBytes(Url)
+            if not Raw and type(fs) == "table" and Library.Folders and Library.Folders.Images then
+                local ImagePath = Library.Folders.Images .. "/" .. Name .. ".png"
+                pcall(function()
+                    if fs.file(ImagePath) then
+                        Raw = TakeBytes(fs.read(ImagePath))
+                    end
+                end)
+                if not Raw then
+                    Raw = FetchBytes(Url)
+                    if Raw and type(fs.write) == "function" then
+                        pcall(fs.write, ImagePath, Raw)
+                    end
                 end
             end
             Library.Icons[Name] = Raw
@@ -281,13 +297,10 @@ local Library do
         ReadyIconCount = BuildIconCount
     end
 
-    local function SetWindowBlocked(Blocked)
-        Blocked = Blocked == true
-        if WindowBlocked == Blocked then
-            return
-        end
-        WindowBlocked = Blocked
-        pcall(block_roblox_window, Blocked)
+    local function SetWindowBlocked(_)
+        -- block_roblox_window() takes no state on this build and swallows keyboard input.
+        WindowBlocked = false
+        pcall(setrobloxinput, true)
     end
 
     local function CreateImage()
@@ -354,6 +367,180 @@ local Library do
             BuildMeasures[BuildMeasureCount] = { Key, Library.Font or "Verdana", Size, Text }
         end
         return Vector2New(math.max(8, #Text * (Size * 0.5)), Size + 2)
+    end
+
+    local DockSquares = {}
+    local DockImages = {}
+    local DockReady = {}
+    local DockIconUrls = {
+        "https://raw.githubusercontent.com/lec1e/Severe-UI-Libraries/refs/heads/main/assets/goop/Home.png",
+        "https://raw.githubusercontent.com/lec1e/Severe-UI-Libraries/refs/heads/main/assets/goop/Style.png",
+        "https://raw.githubusercontent.com/lec1e/Severe-UI-Libraries/refs/heads/main/assets/goop/Config.png",
+    }
+    local DockGlyphs = { "H", "S", "C" }
+
+    local function CreateDrawing(Kind)
+        if type(Drawing) == "table" and type(Drawing.new) == "function" then
+            local Ok, Obj = pcall(Drawing.new, Kind)
+            if Ok and Obj then
+                return Obj
+            end
+        end
+        local Global
+        pcall(function()
+            Global = _G[Kind]
+        end)
+        if type(Global) == "table" and type(Global.new) == "function" then
+            local Ok, Obj = pcall(Global.new)
+            if Ok and Obj then
+                return Obj
+            end
+        end
+    end
+
+    local function HideList(List)
+        for Index = 1, #List do
+            local Obj = List[Index]
+            if Obj then
+                pcall(function()
+                    Obj.Visible = false
+                end)
+            end
+        end
+    end
+
+    local function HideDock()
+        HideList(DockSquares)
+        HideList(DockImages)
+    end
+
+    local function RetainSquare(Slot, X, Y, W, H, Color, Z)
+        local Obj = DockSquares[Slot]
+        if not Obj then
+            Obj = CreateDrawing("Square")
+            DockSquares[Slot] = Obj
+        end
+        if not Obj then
+            return
+        end
+        pcall(function()
+            Obj.Visible = true
+            Obj.Filled = true
+            Obj.Transparency = 0
+            Obj.Opacity = 1
+            Obj.ZIndex = Z
+            Obj.Position = vector.create(X, Y)
+            Obj.Size = vector.create(W, H)
+            Obj.Color = AsColor(Color)
+        end)
+    end
+
+    local function PaintDock()
+        local NB = Library.NavigationBarData
+        if not NB or Library.MasterVisible ~= true then
+            HideDock()
+            return
+        end
+        local BtnSize, BtnGap, Pad = 28, 3, 6
+        local Slot = 1
+        local function Ring(X, Y, W, H, Color)
+            DrawRect(X, Y, W, 2, Color)
+            DrawRect(X, Y + H - 2, W, 2, Color)
+            DrawRect(X, Y, 2, H, Color)
+            DrawRect(X + W - 2, Y, 2, H, Color)
+        end
+        local function Frame(X, Y, W, H, Thick, Color)
+            Thick = math.min(Thick, MathFloor(math.min(W, H) / 2))
+            if Thick < 1 then
+                return
+            end
+            DrawRect(X, Y, W, Thick, Color)
+            DrawRect(X, Y + H - Thick, W, Thick, Color)
+            local Mid = H - Thick * 2
+            if Mid > 0 then
+                DrawRect(X, Y + Thick, Thick, Mid, Color)
+                DrawRect(X + W - Thick, Y + Thick, Thick, Mid, Color)
+            end
+        end
+        local function Box(X, Y, W, H, Outer, Border, Fill, Z)
+            if W < 4 or H < 4 then
+                return
+            end
+            RetainSquare(Slot, X, Y, W, H, Outer, Z)
+            Slot = Slot + 1
+            RetainSquare(Slot, X + 1, Y + 1, W - 2, H - 2, Border, Z + 1)
+            Slot = Slot + 1
+            RetainSquare(Slot, X + 2, Y + 2, W - 4, H - 4, Fill, Z + 2)
+            Slot = Slot + 1
+        end
+        Box(NB.X, NB.Y, NB.Width, NB.Height, Theme["Black"], Theme["Accent"], Theme["Background"], 20000)
+        Frame(NB.X, NB.Y, NB.Width, NB.Height, 2, Theme["Black"])
+        Frame(NB.X + 2, NB.Y + 2, NB.Width - 4, NB.Height - 4, 1, Theme["Accent"])
+        Frame(NB.X + 3, NB.Y + 3, NB.Width - 6, NB.Height - 6, Pad - 3, Theme["Background"])
+        for Index, Btn in NB.Buttons do
+            local BX = NB.X + Pad + (Index - 1) * (BtnSize + BtnGap)
+            local BY = NB.Y + Pad
+            local Active = Btn.Window and Btn.Window.Visible
+            local Hovered = Library:IsHovering(BX, BY, BtnSize, BtnSize) and not Library.Input.Consumed
+            local Fill = Active and Theme["Accent"] or (Hovered and Theme["Dark Background"] or Theme["Background"])
+            local Edge = Active and Theme["Accent"] or Theme["Border"]
+            Box(BX, BY, BtnSize, BtnSize, Theme["Black"], Edge, Fill, 20100 + Index * 10)
+            Frame(BX, BY, BtnSize, BtnSize, 6, Fill)
+            Ring(BX, BY, BtnSize, BtnSize, Edge)
+            local Img = DockImages[Index]
+            if not Img then
+                Img = CreateDrawing("Image")
+                DockImages[Index] = Img
+            end
+            if Img then
+                if not DockReady[Index] then
+                    DockReady[Index] = true
+                    pcall(function()
+                        local Raw = Btn.Icon
+                        if type(Raw) == "string" and #Raw > 24 and string.byte(Raw, 1) == 137 then
+                            Img.Data = Raw
+                        end
+                        Img.Url = DockIconUrls[Index]
+                    end)
+                end
+                local IconColor = Active and Theme["White"] or (Hovered and Theme["Accent"] or Theme["Dim"])
+                pcall(function()
+                    Img.Visible = true
+                    Img.Transparency = 0
+                    Img.Opacity = 1
+                    Img.ZIndex = 20300 + Index
+                    Img.Position = vector.create(BX + 6, BY + 6)
+                    Img.Size = vector.create(16, 16)
+                    Img.Color = AsColor(IconColor)
+                end)
+            else
+                local Glyph = DockGlyphs[Index] or ""
+                local Bounds = GetTextBounds(Glyph)
+                DrawText(BX + MathFloor((BtnSize - Bounds.X) / 2), BY + MathFloor((BtnSize - Bounds.Y) / 2), Library.FontSize, Theme["White"], Glyph)
+            end
+            if Library.Input.MouseClicked and Hovered and Btn.Window then
+                Library.Input.Consumed = true
+                Btn.Window.Visible = not Btn.Window.Visible
+            end
+        end
+        local ButtonCount = #NB.Buttons
+        for Index = 1, ButtonCount - 1 do
+            local GX = NB.X + Pad + Index * BtnSize + (Index - 1) * BtnGap
+            DrawRect(GX, NB.Y + Pad, BtnGap, BtnSize, Theme["Background"])
+        end
+        local ExtraY = NB.Y + Pad + BtnSize
+        local ExtraH = (NB.Y + NB.Height - Pad) - ExtraY
+        if ExtraH > 0 then
+            DrawRect(NB.X + Pad, ExtraY, NB.Width - Pad * 2, ExtraH, Theme["Background"])
+        end
+        for Index = Slot, #DockSquares do
+            local Obj = DockSquares[Index]
+            if Obj then
+                pcall(function()
+                    Obj.Visible = false
+                end)
+            end
+        end
     end
 
     local function DrawImage(X, Y, W, H, Source, Color, Opacity)
@@ -3098,36 +3285,6 @@ local Library do
             local Item = Texts[Index]
             pcall(DrawingImmediate.OutlinedText, Item[1], Item[2], Item[3], Item[4], Item[5], Item[6], Item[7])
         end
-        pcall(function()
-        local Icons = ReadyIcons
-        local IconTotal = ReadyIconCount
-        for Index = 1, IconTotal do
-            local Icon = Icons[Index]
-            local Obj = PreparedIcons[Icon[1]]
-            if not Obj then
-                Obj = CreateImage()
-                if Obj then
-                    Obj.Data = Icon[1]
-                    PreparedIcons[Icon[1]] = Obj
-                end
-            end
-            if Obj then
-                IconDrawings[Index] = Obj
-                Obj.Visible = true
-                Obj.Position = Icon[2]
-                Obj.Size = Icon[3]
-                Obj.Color = Icon[4]
-                Obj.Opacity = Icon[5]
-                Obj.ZIndex = 30000 + Index
-            end
-        end
-        for Index = IconTotal + 1, #IconDrawings do
-            local Obj = IconDrawings[Index]
-            if Obj then
-                Obj.Visible = false
-            end
-        end
-        end)
     end)
     end)
     if not OkRenderBind then
@@ -3205,39 +3362,7 @@ local Library do
             Window:RenderNotifications()
         end
 
-        if Library.NavigationBarData and Library.MasterVisible then
-            local NB = Library.NavigationBarData
-            local BtnSize = 28
-            local BtnGap = 3
-            local Pad = 6
-
-            DrawBox(NB.X, NB.Y, NB.Width, NB.Height, Theme["Black"], Theme["Accent"], Theme["Background"])
-
-            for Index, Btn in NB.Buttons do
-                local BX = NB.X + Pad + (Index - 1) * (BtnSize + BtnGap)
-                local BY = NB.Y + Pad
-                local Active = Btn.Window and Btn.Window.Visible
-                local Hovered = Library:IsHovering(BX, BY, BtnSize, BtnSize) and not Library.Input.Consumed
-
-                DrawBox(BX, BY, BtnSize, BtnSize,
-                    Theme["Black"],
-                    Active and Theme["Accent"] or Theme["Border"],
-                    Active and Theme["Accent"] or (Hovered and Theme["Dark Background"] or Theme["Background"]))
-
-                local IconPad = 6
-                local IW = BtnSize - IconPad * 2
-                local IH = IW
-
-                local IconColor = Active and Theme["White"] or (Hovered and Theme["Accent"] or Theme["Dim"])
-
-                DrawImage(BX + IconPad, BY + IconPad, IW, IH, Btn.Icon, IconColor, 1)
-
-                if Library.Input.MouseClicked and Hovered and Btn.Window then
-                    Library.Input.Consumed = true
-                    Btn.Window.Visible = not Btn.Window.Visible
-                end
-            end
-        end
+        PaintDock()
 
         InFrame = false
         PublishFrame()
@@ -3251,7 +3376,7 @@ local Library do
                 end
             end
         end
-        SetWindowBlocked(MenuOpen)
+        SetWindowBlocked(false)
     end
     local function RunMenu()
         local Ok, Err = pcall(StepMenu)
@@ -3299,6 +3424,7 @@ local Library do
         BeginFrame()
         PublishFrame()
         SetWindowBlocked(false)
+        pcall(HideDock)
     end
 end
 
