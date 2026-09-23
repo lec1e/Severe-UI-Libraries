@@ -89,7 +89,13 @@ local Library do
     }
 
     Library.Camera = Camera
-    Library.Viewport = Camera.ViewportSize * Library.DPIScale
+    local OkView, View = pcall(function()
+        return Camera.ViewportSize * Library.DPIScale
+    end)
+    if not OkView or View == nil then
+        OkView, View = pcall(getscreendimensions)
+    end
+    Library.Viewport = (OkView and View) or vector.create(1280, 720)
 
     local Theme = Library.Theme
 
@@ -145,11 +151,13 @@ local Library do
         ["Space"] = " ", ["Minus"] = "-", ["Underscore"] = "_", ["Period"] = ".",
     }
 
-    for _, Folder in Library.Folders do
-        if not fs.folder(Folder) then
-            fs.make(Folder)
+    pcall(function()
+        for _, Folder in Library.Folders do
+            if not fs.folder(Folder) then
+                fs.make(Folder)
+            end
         end
-    end
+    end)
 
     local function LoadFonts()
         for _, FontData in pairs(Library.Fonts.Stored) do
@@ -463,16 +471,43 @@ local Library do
     function Library:UpdateInput()
         local Input = self.Input
 
-        self.Viewport = self.Camera.ViewportSize * self.DPIScale
+        local OkView, View = pcall(function()
+            return self.Camera.ViewportSize * self.DPIScale
+        end)
+        if not OkView or View == nil then
+            OkView, View = pcall(getscreendimensions)
+        end
+        if OkView and View then
+            self.Viewport = View
+        end
 
-        Input.Mouse = UserInputService:GetMouseLocation()
-        Input.MouseX = Input.Mouse.X * self.DPIScale
-        Input.MouseY = Input.Mouse.Y * self.DPIScale
-        Input.MouseClicked = isleftpressed() and not Input.MousePrevious
-        Input.RightClicked = isrightpressed() and not Input.RightPrevious
-        Input.MouseDown = isleftpressed()
-        Input.MousePrevious = isleftpressed()
-        Input.RightPrevious = isrightpressed()
+        local Mouse
+        if type(getmouseposition) == "function" then
+            local OkMouse, MousePos = pcall(getmouseposition)
+            if OkMouse then
+                Mouse = MousePos
+            end
+        end
+        Input.Mouse = Mouse
+        local Scale = self.DPIScale or 1
+        Input.MouseX = ((Mouse and (Mouse.X or Mouse.x)) or 0) * Scale
+        Input.MouseY = ((Mouse and (Mouse.Y or Mouse.y)) or 0) * Scale
+
+        local LeftDown = false
+        local RightDown = false
+        if type(isleftpressed) == "function" then
+            local OkLeft, Left = pcall(isleftpressed)
+            LeftDown = OkLeft and Left == true
+        end
+        if type(isrightpressed) == "function" then
+            local OkRight, Right = pcall(isrightpressed)
+            RightDown = OkRight and Right == true
+        end
+        Input.MouseClicked = LeftDown and not Input.MousePrevious
+        Input.RightClicked = RightDown and not Input.RightPrevious
+        Input.MouseDown = LeftDown
+        Input.MousePrevious = LeftDown
+        Input.RightPrevious = RightDown
     end
 
     function Library:IsHovering(X, Y, Width, Height)
@@ -3032,14 +3067,7 @@ local Library do
         local Ok, Signal = pcall(function()
             return RunService[Name]
         end)
-        if not Ok or Signal == nil then
-            return nil
-        end
-        local HasConnect = false
-        pcall(function()
-            HasConnect = type(Signal.Connect) == "function"
-        end)
-        if HasConnect then
+        if Ok and Signal ~= nil then
             return Signal
         end
     end
@@ -3047,25 +3075,30 @@ local Library do
     local RenderConnection
     local RenderSignal = ReadSignal("Render")
     if RenderSignal then
+    local OkRenderBind, RenderBindErr = pcall(function()
     RenderConnection = RenderSignal:Connect(function()
         local Measures = ReadyMeasures
         local MeasureTotal = ReadyMeasureCount
         for Index = 1, MeasureTotal do
             local Item = Measures[Index]
-            BoundsCache[Item[1]] = DrawingImmediate.GetTextBounds(Item[2], Item[3], Item[4])
+            local OkBounds, Bounds = pcall(DrawingImmediate.GetTextBounds, Item[2], Item[3], Item[4])
+            if OkBounds then
+                BoundsCache[Item[1]] = Bounds
+            end
         end
         local Rects = ReadyRects
         local RectTotal = ReadyRectCount
         for Index = 1, RectTotal do
             local Rect = Rects[Index]
-            DrawingImmediate.FilledRectangle(Rect[1], Rect[2], Rect[3], Rect[4], 0)
+            pcall(DrawingImmediate.FilledRectangle, Rect[1], Rect[2], Rect[3], Rect[4], 0)
         end
         local Texts = ReadyTexts
         local TextTotal = ReadyTextCount
         for Index = 1, TextTotal do
             local Item = Texts[Index]
-            DrawingImmediate.OutlinedText(Item[1], Item[2], Item[3], Item[4], Item[5], Item[6], Item[7])
+            pcall(DrawingImmediate.OutlinedText, Item[1], Item[2], Item[3], Item[4], Item[5], Item[6], Item[7])
         end
+        pcall(function()
         local Icons = ReadyIcons
         local IconTotal = ReadyIconCount
         for Index = 1, IconTotal do
@@ -3094,15 +3127,22 @@ local Library do
                 Obj.Visible = false
             end
         end
+        end)
     end)
+    end)
+    if not OkRenderBind then
+        pcall(print, "[Goop UI] " .. tostring(RenderBindErr))
+    end
     end
 
     local FrameConnection
-    local FrameSignal = ReadSignal("Script") or ReadSignal("Extra") or ReadSignal("PreLocal")
+    local FrameSignal = ReadSignal("PreLocal")
     if FrameSignal then
-    FrameConnection = FrameSignal:Connect(function()
+    local function StepMenu()
         InFrame = false
-        Library:UpdateInput()
+        pcall(function()
+            Library:UpdateInput()
+        end)
         Library.Input.Consumed = false
         Library.DropdownOverlay = nil
         Library.SnapGuides = nil
@@ -3118,7 +3158,10 @@ local Library do
         InFrame = true
 
         local MenuKey = MainWin.MenuToggleKey or "RightShift"
-        local PressedKeys = getpressedkeys() or { }
+        local OkKeys, PressedKeys = pcall(getpressedkeys)
+        if not OkKeys or type(PressedKeys) ~= "table" then
+            PressedKeys = { }
+        end
         local MenuKeyDown = TableFind(PressedKeys, MenuKey) ~= nil
 
         if MenuKeyDown and not Library.MasterPrevState then
@@ -3209,7 +3252,30 @@ local Library do
             end
         end
         SetWindowBlocked(MenuOpen)
+    end
+    local function RunMenu()
+        local Ok, Err = pcall(StepMenu)
+        if not Ok then
+            InFrame = false
+            PublishFrame()
+            if not Library.FrameFault then
+                Library.FrameFault = tostring(Err)
+                pcall(print, "[Goop UI] " .. Library.FrameFault)
+            end
+        end
+    end
+    local OkFrameBind, FrameBindErr = pcall(function()
+        FrameConnection = FrameSignal:Connect(RunMenu)
     end)
+    if not OkFrameBind then
+        pcall(print, "[Goop UI] " .. tostring(FrameBindErr))
+        task.spawn(function()
+            while true do
+                RunMenu()
+                task.wait(0.03)
+            end
+        end)
+    end
     end
 
     function Library:Unload()
