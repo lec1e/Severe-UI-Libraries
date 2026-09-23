@@ -192,15 +192,25 @@ local Library do
                 fs.write(ImagePath, http.get({ url = Url }))
             end
 
-            local Raw = fs.read(ImagePath)
-            if type(Raw) == "buffer" then
-                local Ok, Text = pcall(buffer.tostring, Raw)
-                Raw = Ok and type(Text) == "string" and Text or nil
+            local function AsBytes(Value)
+                if type(Value) == "buffer" then
+                    local Ok, Text = pcall(buffer.tostring, Value)
+                    Value = Ok and Text or nil
+                end
+                if type(Value) == "string" and #Value > 8 then
+                    return Value
+                end
             end
-            if type(Raw) ~= "string" or #Raw < 8 then
-                Raw = nil
+
+            local Raw = AsBytes(fs.read(ImagePath))
+            if not Raw then
+                local Body = http.get({ url = Url })
+                Raw = AsBytes(Body)
+                if Raw then
+                    fs.write(ImagePath, Raw)
+                end
             end
-            Library.Icons[Name] = { Url = Url, Path = ImagePath, Data = Raw }
+            Library.Icons[Name] = Raw
         end
     end
 
@@ -214,14 +224,11 @@ local Library do
     local BuildRects, ReadyRects = {}, {}
     local BuildTexts, ReadyTexts = {}, {}
     local BuildMeasures, ReadyMeasures = {}, {}
-    local BuildImages, ReadyImages = {}, {}
     local BuildRectCount, ReadyRectCount = 0, 0
     local BuildTextCount, ReadyTextCount = 0, 0
     local BuildMeasureCount, ReadyMeasureCount = 0, 0
-    local BuildImageCount, ReadyImageCount = 0, 0
-    local ImageObjects = {}
-    local ImageObjectCount = 0
-    local ImmediateImage = type(DrawingImmediate) == "table" and DrawingImmediate.Image or nil
+    local IconDrawings = {}
+    local IconCount = 0
     local ImageNew = type(Image) == "table" and Image.new or nil
     local DrawingNew = type(Drawing) == "table" and Drawing.new or nil
 
@@ -250,22 +257,25 @@ local Library do
         BuildRectCount = 0
         BuildTextCount = 0
         BuildMeasureCount = 0
-        BuildImageCount = 0
+        IconCount = 0
     end
 
     local function PublishFrame()
+        for Index = IconCount + 1, #IconDrawings do
+            local Obj = IconDrawings[Index]
+            if Obj then
+                Obj.Visible = false
+            end
+        end
         ReadyRects, BuildRects = BuildRects, ReadyRects
         ReadyRectCount = BuildRectCount
         ReadyTexts, BuildTexts = BuildTexts, ReadyTexts
         ReadyTextCount = BuildTextCount
         ReadyMeasures, BuildMeasures = BuildMeasures, ReadyMeasures
         ReadyMeasureCount = BuildMeasureCount
-        ReadyImages, BuildImages = BuildImages, ReadyImages
-        ReadyImageCount = BuildImageCount
         BuildRectCount = 0
         BuildTextCount = 0
         BuildMeasureCount = 0
-        BuildImageCount = 0
     end
 
     local function CreateImage()
@@ -339,31 +349,31 @@ local Library do
         Y = tonumber(Y) or 0
         W = MathFloor(tonumber(W) or 0)
         H = MathFloor(tonumber(H) or 0)
-        if W < 1 or H < 1 or not InFrame then
-            return
-        end
-        local Url, Data
         if type(Source) == "table" then
-            Url = Source.Url or Source.Path
-            Data = Source.Data
-        elseif type(Source) == "string" then
-            Url = Source
+            Source = Source.Data
         end
-        if type(Url) ~= "string" or Url == "" then
+        if W < 1 or H < 1 or not InFrame or type(Source) ~= "string" or #Source < 8 then
             return
         end
-        if type(Data) ~= "string" or #Data < 8 or Data:sub(1, 4) == "http" then
-            Data = false
+        IconCount = IconCount + 1
+        local Obj = IconDrawings[IconCount]
+        if not Obj then
+            Obj = CreateImage()
+            IconDrawings[IconCount] = Obj
         end
-        BuildImageCount = BuildImageCount + 1
-        BuildImages[BuildImageCount] = {
-            Url,
-            Data,
-            vector.create(X, Y),
-            vector.create(W, H),
-            AsColor(Color),
-            Opacity or 1,
-        }
+        if not Obj then
+            return
+        end
+        local Pos = vector.create(X, Y)
+        local Size = vector.create(W, H)
+        local Tint = Color
+        Obj.Visible = true
+        Obj.Data = Source
+        Obj.Position = Pos
+        Obj.Size = Size
+        Obj.Color = Tint
+        Obj.Opacity = Opacity or 1
+        Obj.ZIndex = 30000 + IconCount
     end
 
     local function DrawBox(X, Y, W, H, Outer, Border, Fill)
@@ -3023,40 +3033,6 @@ local Library do
         for Index = 1, TextTotal do
             local Item = Texts[Index]
             DrawingImmediate.OutlinedText(Item[1], Item[2], Item[3], Item[4], Item[5], Item[6], Item[7])
-        end
-        local Images = ReadyImages
-        local ImageTotal = ReadyImageCount
-        for Index = 1, ImageTotal do
-            local Item = Images[Index]
-            if ImmediateImage then
-                ImmediateImage(Item[1], Item[3], Item[4], Item[5], Item[6], false, 0)
-            end
-            local Obj = ImageObjects[Index]
-            if not Obj then
-                Obj = CreateImage()
-                ImageObjects[Index] = Obj
-                if Obj and Index > ImageObjectCount then
-                    ImageObjectCount = Index
-                end
-            end
-            if Obj then
-                Obj.Visible = true
-                Obj.Url = Item[1]
-                if Item[2] then
-                    Obj.Data = Item[2]
-                end
-                Obj.Position = Item[3]
-                Obj.Size = Item[4]
-                Obj.Color = Item[5]
-                Obj.Opacity = Item[6]
-                Obj.ZIndex = 30000 + Index
-            end
-        end
-        for Index = ImageTotal + 1, ImageObjectCount do
-            local Obj = ImageObjects[Index]
-            if Obj then
-                Obj.Visible = false
-            end
         end
     end)
 
