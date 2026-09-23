@@ -1,9 +1,7 @@
-
 local Library do
     local UserInputService = game:GetService("UserInputService")
     local Players = game:GetService("Players")
     local Workspace = game:GetService("Workspace")
-    local RunService = game:GetService("RunService")
 
     local Camera = Workspace.CurrentCamera
 
@@ -201,15 +199,10 @@ local Library do
     LoadIcons()
 
     -- // Core \\ --
-    -- RunService.Render may only call DrawingImmediate. Layout runs on PreLocal.
+    -- Retained drawings are updated on PreLocal. RunService.Render is drawing-only
+    -- and rejects anything that is not a bare DrawingImmediate call.
     local InFrame = false
-    local Rects = {}
-    local RectCount = 0
-    local Texts = {}
-    local TextCount = 0
-    local BoundsCache = {}
-    local MeasureQueue = {}
-    local MeasureCount = 0
+    local OutlineColor = vector.create(0, 0, 0)
 
     local function AsColor(Color)
         if type(Color) == "vector" then
@@ -232,6 +225,53 @@ local Library do
         return vector.create(1, 1, 1)
     end
 
+    local function NewDrawing(Type)
+        local Ctor = rawget(_G, Type)
+        if type(Ctor) == "table" and type(Ctor.new) == "function" then
+            local Ok, Object = pcall(function()
+                return Ctor.new()
+            end)
+            if Ok and Object then
+                return Object
+            end
+        end
+        if type(Drawing) == "table" and type(Drawing.new) == "function" then
+            local Ok, Object = pcall(Drawing.new, Type)
+            if Ok and Object then
+                return Object
+            end
+        end
+    end
+
+    local function SetProp(Object, Key, Value)
+        if Object then
+            pcall(function()
+                Object[Key] = Value
+            end)
+        end
+    end
+
+    local Pool = {
+        Squares = {},
+        SquareCount = 0,
+        Texts = {},
+        TextCount = 0,
+    }
+
+    function Pool:Begin()
+        self.SquareCount = 0
+        self.TextCount = 0
+    end
+
+    function Pool:Finish()
+        for Index = self.SquareCount + 1, #self.Squares do
+            SetProp(self.Squares[Index], "Visible", false)
+        end
+        for Index = self.TextCount + 1, #self.Texts do
+            SetProp(self.Texts[Index], "Visible", false)
+        end
+    end
+
     -- // Draw Helpers \\ --
 
     local function DrawRect(X, Y, W, H, Color, Opacity)
@@ -242,8 +282,20 @@ local Library do
         if W < 1 or H < 1 or X ~= X or Y ~= Y or not InFrame then
             return
         end
-        RectCount = RectCount + 1
-        Rects[RectCount] = { vector.create(X, Y), vector.create(W, H), AsColor(Color), Opacity or 1 }
+        Pool.SquareCount = Pool.SquareCount + 1
+        local Square = Pool.Squares[Pool.SquareCount]
+        if not Square then
+            Square = NewDrawing("Square")
+            Pool.Squares[Pool.SquareCount] = Square
+            SetProp(Square, "Filled", true)
+            SetProp(Square, "Thickness", 1)
+        end
+        SetProp(Square, "Visible", true)
+        SetProp(Square, "Position", vector.create(X, Y))
+        SetProp(Square, "Size", vector.create(W, H))
+        SetProp(Square, "Color", AsColor(Color))
+        SetProp(Square, "Opacity", Opacity or 1)
+        SetProp(Square, "ZIndex", Pool.SquareCount + Pool.TextCount)
     end
 
     local function DrawText(X, Y, Size, Color, Text, Opacity, Center)
@@ -252,31 +304,42 @@ local Library do
         if X ~= X or Y ~= Y or not InFrame then
             return
         end
-        TextCount = TextCount + 1
-        Texts[TextCount] = {
-            vector.create(X, Y),
-            Size or Library.FontSize,
-            AsColor(Color),
-            Opacity or 1,
-            tostring(Text or ""),
-            Center == true,
-            Library.Font or "Verdana",
-        }
+        Pool.TextCount = Pool.TextCount + 1
+        local Object = Pool.Texts[Pool.TextCount]
+        if not Object then
+            Object = NewDrawing("Text")
+            Pool.Texts[Pool.TextCount] = Object
+            SetProp(Object, "Outline", true)
+            SetProp(Object, "OutlineColor", OutlineColor)
+        end
+        SetProp(Object, "Visible", true)
+        SetProp(Object, "Position", vector.create(X, Y))
+        SetProp(Object, "Size", Size or Library.FontSize)
+        SetProp(Object, "Color", AsColor(Color))
+        SetProp(Object, "Text", tostring(Text or ""))
+        SetProp(Object, "Center", Center == true)
+        SetProp(Object, "Opacity", Opacity or 1)
+        SetProp(Object, "ZIndex", Pool.SquareCount + Pool.TextCount)
     end
+
+    local MeasureText = NewDrawing("Text")
+    SetProp(MeasureText, "Visible", false)
 
     local function GetTextBounds(Text, Size)
         Text = tostring(Text or "")
         Size = Size or Library.FontSize
-        local Key = tostring(Size) .. "\0" .. Text
-        local Cached = BoundsCache[Key]
-        if Cached then
-            return Vector2New(Cached.X or Cached.x or 0, Cached.Y or Cached.y or (Size + 2))
+        SetProp(MeasureText, "Text", Text)
+        SetProp(MeasureText, "Size", Size)
+        local Bounds = MeasureText and MeasureText.TextBounds
+        local Width = Bounds and (Bounds.X or Bounds.x) or 0
+        local Height = Bounds and (Bounds.Y or Bounds.y) or 0
+        if Width <= 0 then
+            Width = math.max(8, #Text * (Size * 0.5))
         end
-        if InFrame then
-            MeasureCount = MeasureCount + 1
-            MeasureQueue[MeasureCount] = { Key, Library.Font or "Verdana", Size, Text }
+        if Height <= 0 then
+            Height = Size + 2
         end
-        return Vector2New(math.max(8, #Text * (Size * 0.5)), Size + 2)
+        return Vector2New(Width, Height)
     end
 
     local function DrawImage()
@@ -2921,21 +2984,6 @@ local Library do
     Library.WindowSnapping = true
     Library.SnapGuides = nil
 
-    local RenderConnection = RunService.Render:Connect(function()
-        for Index = 1, MeasureCount do
-            local Item = MeasureQueue[Index]
-            BoundsCache[Item[1]] = DrawingImmediate.GetTextBounds(Item[2], Item[3], Item[4])
-        end
-        for Index = 1, RectCount do
-            local Rect = Rects[Index]
-            DrawingImmediate.FilledRectangle(Rect[1], Rect[2], Rect[3], Rect[4], 0)
-        end
-        for Index = 1, TextCount do
-            local Text = Texts[Index]
-            DrawingImmediate.OutlinedText(Text[1], Text[2], Text[3], Text[4], Text[5], Text[6], Text[7])
-        end
-    end)
-
     local FrameConnection = RunService.PreLocal:Connect(function()
         InFrame = false
         Library:UpdateInput()
@@ -2944,10 +2992,9 @@ local Library do
         Library.SnapGuides = nil
 
         local MainWin = Library.Windows[1]
-        RectCount = 0
-        TextCount = 0
-        MeasureCount = 0
+        Pool:Begin()
         if not MainWin then
+            Pool:Finish()
             return
         end
 
@@ -3033,21 +3080,18 @@ local Library do
         end
 
         InFrame = false
+        Pool:Finish()
     end)
 
     function Library:Unload()
-        if RenderConnection then
-            RenderConnection:Disconnect()
-            RenderConnection = nil
-        end
         if FrameConnection then
             FrameConnection:Disconnect()
             FrameConnection = nil
         end
         InFrame = false
-        RectCount = 0
-        TextCount = 0
-        MeasureCount = 0
+        Pool:Begin()
+        Pool:Finish()
+        SetProp(MeasureText, "Visible", false)
     end
 end
 
