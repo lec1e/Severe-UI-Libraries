@@ -2,6 +2,7 @@ local Library do
     local UserInputService = game:GetService("UserInputService")
     local Players = game:GetService("Players")
     local Workspace = game:GetService("Workspace")
+    local RunService = game:GetService("RunService")
 
     local Camera = Workspace.CurrentCamera
 
@@ -25,6 +26,7 @@ local Library do
 
     Library = {
         Flags = { },
+        ImmediateDraw = true,
 
         Theme = {
             ["Accent"] = FromRGB(177, 156, 217),
@@ -191,190 +193,98 @@ local Library do
                 fs.write(ImagePath, http.get({ url = Url }))
             end
 
-            Library.Icons[Name] = fs.read(ImagePath)
+            Library.Icons[Name] = ImagePath
         end
     end
 
     LoadIcons()
 
     -- // Core \\ --
-    local OutlineColor = Vector3.new(0, 0, 0)
-    local PropCache = setmetatable({ }, { __mode = "k" })
+    -- Severe only allows DrawingImmediate from the RunService.Render callback.
+    -- Widgets queue commands; that callback submits them itself.
+    local InRender = false
+    local Commands = {}
+    local CommandCount = 0
+    local BoundsCache = {}
+    local MeasureQueue = {}
+    local MeasureCount = 0
 
-    local function NewDrawing(Type, Properties)
-        local Ok, Object = pcall(Drawing.new, Type)
-        if not Ok or not Object then
-            return nil
-        end
-        local Cache = { }
-        PropCache[Object] = Cache
-        if Properties then
-            for Key, Value in Properties do
-                pcall(function()
-                    Object[Key] = Value
-                end)
-                Cache[Key] = Value
+    local function QueueCommand(Command)
+        CommandCount = CommandCount + 1
+        Commands[CommandCount] = Command
+    end
+
+    local function FlushDraw()
+        local Font = Library.Font or "Verdana"
+        for i = 1, MeasureCount do
+            local Item = MeasureQueue[i]
+            local Bounds = DrawingImmediate.GetTextBounds(Font, Item[2], Item[3])
+            if Bounds and Bounds.X then
+                BoundsCache[Item[1]] = Bounds
             end
         end
-        return Object
-    end
+        MeasureCount = 0
 
-    local function UpdateDrawing(Object, Properties)
-        if not Object then
-            return
-        end
-        local Cache = PropCache[Object]
-        if not Cache then
-            Cache = { }
-            PropCache[Object] = Cache
-        end
-        for Key, Value in Properties do
-            if Cache[Key] ~= Value then
-                pcall(function()
-                    Object[Key] = Value
-                end)
-                Cache[Key] = Value
+        for i = 1, CommandCount do
+            local Command = Commands[i]
+            local Kind = Command[1]
+            if Kind == "r" then
+                DrawingImmediate.FilledRectangle(Vector2New(Command[2], Command[3]), Vector2New(Command[4], Command[5]), Command[6], Command[7])
+            elseif Kind == "t" then
+                DrawingImmediate.OutlinedText(Vector2New(Command[2], Command[3]), Command[4], Command[5], Command[7], Command[6], Command[8], Font)
+            elseif Kind == "i" then
+                DrawingImmediate.Image(Command[2], Vector2New(Command[3], Command[4]), Vector2New(Command[5], Command[6]), Command[7], Command[8], false, 0)
             end
         end
-    end
-
-    local Pool = {
-        Squares = { }, SquareCount = 0,
-        Texts = { }, TextCount = 0,
-        Images = { }, ImageCount = 0,
-        Order = 0,
-    }
-
-    function Pool:Begin()
-        self.SquareCount = 0
-        self.TextCount = 0
-        self.ImageCount = 0
-        self.Order = 0
-    end
-
-    function Pool:Finish()
-        for Index = self.SquareCount + 1, #self.Squares do
-            UpdateDrawing(self.Squares[Index], { Visible = false })
-        end
-        for Index = self.TextCount + 1, #self.Texts do
-            UpdateDrawing(self.Texts[Index], { Visible = false })
-        end
-        for Index = self.ImageCount + 1, #self.Images do
-            UpdateDrawing(self.Images[Index], { Visible = false })
-        end
+        CommandCount = 0
     end
 
     -- // Draw Helpers \\ --
-
-    local MAX_SQUARES = 220
-    local MAX_TEXTS = 120
-    local MAX_IMAGES = 24
 
     local function DrawRect(X, Y, W, H, Color, Opacity)
         W = MathFloor(tonumber(W) or 0)
         H = MathFloor(tonumber(H) or 0)
         X = tonumber(X) or 0
         Y = tonumber(Y) or 0
-        if W < 1 or H < 1 or X ~= X or Y ~= Y then
+        if W < 1 or H < 1 or X ~= X or Y ~= Y or not InRender then
             return
         end
-
-        Pool.Order = Pool.Order + 1
-        local Index = Pool.SquareCount + 1
-        if Index > MAX_SQUARES then
-            return
-        end
-        Pool.SquareCount = Index
-
-        local Square = Pool.Squares[Index]
-        if not Square then
-            Square = NewDrawing("Square", { Filled = true, Thickness = 1 })
-            Pool.Squares[Index] = Square
-        end
-        if not Square then
-            return
-        end
-
-        UpdateDrawing(Square, {
-            Visible = true,
-            Position = Vector2New(X, Y),
-            Size = Vector2New(W, H),
-            Color = Color,
-            Opacity = Opacity or 1,
-            ZIndex = Pool.Order,
-        })
+        QueueCommand({ "r", X, Y, W, H, Color, Opacity or 1 })
     end
 
     local function DrawText(X, Y, Size, Color, Text, Opacity, Center)
         X = tonumber(X) or 0
         Y = tonumber(Y) or 0
-        if X ~= X or Y ~= Y then
+        if X ~= X or Y ~= Y or not InRender then
             return
         end
-
-        Pool.Order = Pool.Order + 1
-        local Index = Pool.TextCount + 1
-        if Index > MAX_TEXTS then
-            return
-        end
-        Pool.TextCount = Index
-
-        local Object = Pool.Texts[Index]
-        if not Object then
-            Object = NewDrawing("Text", { Outline = true, OutlineColor = OutlineColor })
-            Pool.Texts[Index] = Object
-        end
-        if not Object then
-            return
-        end
-
-        UpdateDrawing(Object, {
-            Visible = true,
-            Position = Vector2New(X, Y),
-            Size = Size,
-            Color = Color,
-            Text = Text,
-            Center = Center or false,
-            Opacity = Opacity or 1,
-            Font = Library.Font,
-            ZIndex = Pool.Order,
-        })
+        QueueCommand({ "t", X, Y, Size, Color, tostring(Text or ""), Opacity or 1, Center == true })
     end
-
-    local MeasureText = NewDrawing("Text", { Visible = false })
 
     local function GetTextBounds(Text, Size)
-        UpdateDrawing(MeasureText, {
-            Text = tostring(Text),
-            Size = Size or Library.FontSize,
-            Font = Library.Font,
-        })
-        return MeasureText.TextBounds
+        Text = tostring(Text or "")
+        Size = Size or Library.FontSize
+        local Key = tostring(Size) .. "\0" .. Text
+        local Cached = BoundsCache[Key]
+        if Cached then
+            return Cached
+        end
+        if InRender then
+            MeasureCount = MeasureCount + 1
+            MeasureQueue[MeasureCount] = { Key, Size, Text }
+        end
+        return Vector2New(math.max(8, #Text * (Size * 0.5)), Size + 2)
     end
 
-    local function DrawImage(X, Y, W, H, Data, Color, Opacity, ForcedZ)
-        Pool.Order = Pool.Order + 1
-        local Index = Pool.ImageCount + 1
-        if Index > MAX_IMAGES then
+    local function DrawImage(X, Y, W, H, Source, Color, Opacity)
+        X = tonumber(X) or 0
+        Y = tonumber(Y) or 0
+        W = MathFloor(tonumber(W) or 0)
+        H = MathFloor(tonumber(H) or 0)
+        if type(Source) ~= "string" or Source == "" or W < 1 or H < 1 or not InRender then
             return
         end
-        Pool.ImageCount = Index
-
-        local Object = Pool.Images[Index]
-        if not Object then
-            Object = NewDrawing("Image", { })
-            Pool.Images[Index] = Object
-        end
-
-        UpdateDrawing(Object, {
-            Visible = true,
-            Position = Vector2New(X, Y),
-            Size = Vector2New(W, H),
-            Data = Data,
-            Color = Color or Theme["White"],
-            Opacity = Opacity or 1,
-            ZIndex = ForcedZ or Pool.Order,
-        })
+        QueueCommand({ "i", Source, X, Y, W, H, Color or Theme["White"], Opacity or 1 })
     end
 
     local function DrawBox(X, Y, W, H, Outer, Border, Fill)
@@ -3025,7 +2935,9 @@ local Library do
         local MainWin = Library.Windows[1]
         if not MainWin then return end
 
-        Pool:Begin()
+        InRender = true
+        CommandCount = 0
+        MeasureCount = 0
 
         local MenuKey = MainWin.MenuToggleKey or "RightShift"
         local PressedKeys = getpressedkeys() or { }
@@ -3097,36 +3009,17 @@ local Library do
 
                 local IconColor = Active and Theme["White"] or (Hovered and Theme["Accent"] or Theme["Dim"])
 
-                if not Btn._Drawing or Btn._IconColor ~= IconColor then
-                    if Btn._Drawing then Btn._Drawing:Remove() end
-                    Btn._Drawing = NewDrawing("Image", {
-                        Visible = true,
-                        Position = Vector2New(BX + IconPad, BY + IconPad),
-                        Size = Vector2New(IW, IH),
-                        Data = Btn.Icon,
-                        Color = IconColor,
-                        Opacity = 1,
-                        ZIndex = 10000,
-                    })
-                    Btn._IconColor = IconColor
-                end
+                DrawImage(BX + IconPad, BY + IconPad, IW, IH, Btn.Icon, IconColor, 1)
 
                 if Library.Input.MouseClicked and Hovered and Btn.Window then
                     Library.Input.Consumed = true
                     Btn.Window.Visible = not Btn.Window.Visible
                 end
             end
-        elseif Library.NavigationBarData then
-            for _, Btn in Library.NavigationBarData.Buttons do
-                if Btn._Drawing then
-                    Btn._Drawing:Remove()
-                    Btn._Drawing = nil
-                    Btn._IconColor = nil
-                end
-            end
         end
 
-        Pool:Finish()
+        InRender = false
+        FlushDraw()
     end)
 
     function Library:Unload()
@@ -3134,21 +3027,9 @@ local Library do
             RenderConnection:Disconnect()
             RenderConnection = nil
         end
-        for _, Square in Pool.Squares do Square:Remove() end
-        for _, Object in Pool.Texts do Object:Remove() end
-        for _, Image in Pool.Images do Image:Remove() end
-        Pool.Squares, Pool.SquareCount = { }, 0
-        Pool.Texts, Pool.TextCount = { }, 0
-        Pool.Images, Pool.ImageCount = { }, 0
-
-        if Library.NavigationBarData and Library.NavigationBarData.Buttons then
-            for _, Btn in ipairs(Library.NavigationBarData.Buttons) do
-                if Btn._Drawing then
-                    Btn._Drawing:Remove()
-                    Btn._Drawing = nil
-                end
-            end
-        end
+        InRender = false
+        CommandCount = 0
+        MeasureCount = 0
     end
 end
 
