@@ -435,20 +435,34 @@ local Library do
         end)
     end
 
+    local function DockGlyph(Kind, X, Y, Ink, Paper)
+        if Kind == 1 then
+            DrawRect(X + 6, Y + 1, 4, 2, Ink)
+            DrawRect(X + 2, Y + 3, 12, 2, Ink)
+            DrawRect(X + 4, Y + 5, 8, 9, Ink)
+            DrawRect(X + 7, Y + 9, 2, 5, Paper)
+        elseif Kind == 2 then
+            DrawRect(X + 1, Y + 4, 10, 9, Ink)
+            DrawRect(X + 8, Y + 1, 6, 6, Ink)
+            DrawRect(X + 3, Y + 6, 2, 2, Paper)
+            DrawRect(X + 6, Y + 9, 2, 2, Paper)
+        else
+            DrawRect(X + 1, Y + 3, 14, 2, Ink)
+            DrawRect(X + 1, Y + 7, 14, 2, Ink)
+            DrawRect(X + 1, Y + 11, 14, 2, Ink)
+            DrawRect(X + 3, Y + 2, 3, 4, Ink)
+            DrawRect(X + 9, Y + 6, 3, 4, Ink)
+            DrawRect(X + 6, Y + 10, 3, 4, Ink)
+        end
+    end
+
     local function PaintDock()
+        HideDock()
         local NB = Library.NavigationBarData
         if not NB or Library.MasterVisible ~= true then
-            HideDock()
             return
         end
         local BtnSize, BtnGap, Pad = 28, 3, 6
-        local Slot = 1
-        local function Ring(X, Y, W, H, Color)
-            DrawRect(X, Y, W, 2, Color)
-            DrawRect(X, Y + H - 2, W, 2, Color)
-            DrawRect(X, Y, 2, H, Color)
-            DrawRect(X + W - 2, Y, 2, H, Color)
-        end
         local function Frame(X, Y, W, H, Thick, Color)
             Thick = math.min(Thick, MathFloor(math.min(W, H) / 2))
             if Thick < 1 then
@@ -462,21 +476,9 @@ local Library do
                 DrawRect(X + W - Thick, Y + Thick, Thick, Mid, Color)
             end
         end
-        local function Box(X, Y, W, H, Outer, Border, Fill, Z)
-            if W < 4 or H < 4 then
-                return
-            end
-            RetainSquare(Slot, X, Y, W, H, Outer, Z)
-            Slot = Slot + 1
-            RetainSquare(Slot, X + 1, Y + 1, W - 2, H - 2, Border, Z + 1)
-            Slot = Slot + 1
-            RetainSquare(Slot, X + 2, Y + 2, W - 4, H - 4, Fill, Z + 2)
-            Slot = Slot + 1
-        end
-        Box(NB.X, NB.Y, NB.Width, NB.Height, Theme["Black"], Theme["Accent"], Theme["Background"], 20000)
         Frame(NB.X, NB.Y, NB.Width, NB.Height, 2, Theme["Black"])
         Frame(NB.X + 2, NB.Y + 2, NB.Width - 4, NB.Height - 4, 1, Theme["Accent"])
-        Frame(NB.X + 3, NB.Y + 3, NB.Width - 6, NB.Height - 6, Pad - 3, Theme["Background"])
+        DrawRect(NB.X + 3, NB.Y + 3, NB.Width - 6, NB.Height - 6, Theme["Background"])
         for Index, Btn in NB.Buttons do
             local BX = NB.X + Pad + (Index - 1) * (BtnSize + BtnGap)
             local BY = NB.Y + Pad
@@ -484,40 +486,9 @@ local Library do
             local Hovered = Library:IsHovering(BX, BY, BtnSize, BtnSize) and not Library.Input.Consumed
             local Fill = Active and Theme["Accent"] or (Hovered and Theme["Dark Background"] or Theme["Background"])
             local Edge = Active and Theme["Accent"] or Theme["Border"]
-            Box(BX, BY, BtnSize, BtnSize, Theme["Black"], Edge, Fill, 20100 + Index * 10)
-            Frame(BX, BY, BtnSize, BtnSize, 6, Fill)
-            Ring(BX, BY, BtnSize, BtnSize, Edge)
-            local Img = DockImages[Index]
-            if not Img then
-                Img = CreateDrawing("Image")
-                DockImages[Index] = Img
-            end
-            if Img then
-                if not DockReady[Index] then
-                    DockReady[Index] = true
-                    pcall(function()
-                        local Raw = Btn.Icon
-                        if type(Raw) == "string" and #Raw > 24 and string.byte(Raw, 1) == 137 then
-                            Img.Data = Raw
-                        end
-                        Img.Url = DockIconUrls[Index]
-                    end)
-                end
-                local IconColor = Active and Theme["White"] or (Hovered and Theme["Accent"] or Theme["Dim"])
-                pcall(function()
-                    Img.Visible = true
-                    Img.Transparency = 0
-                    Img.Opacity = 1
-                    Img.ZIndex = 20300 + Index
-                    Img.Position = vector.create(BX + 6, BY + 6)
-                    Img.Size = vector.create(16, 16)
-                    Img.Color = AsColor(IconColor)
-                end)
-            else
-                local Glyph = DockGlyphs[Index] or ""
-                local Bounds = GetTextBounds(Glyph)
-                DrawText(BX + MathFloor((BtnSize - Bounds.X) / 2), BY + MathFloor((BtnSize - Bounds.Y) / 2), Library.FontSize, Theme["White"], Glyph)
-            end
+            DrawRect(BX, BY, BtnSize, BtnSize, Fill)
+            Frame(BX, BY, BtnSize, BtnSize, 2, Edge)
+            DockGlyph(Index, BX + 6, BY + 6, Theme["White"], Fill)
             if Library.Input.MouseClicked and Hovered and Btn.Window then
                 Library.Input.Consumed = true
                 Btn.Window.Visible = not Btn.Window.Visible
@@ -527,19 +498,6 @@ local Library do
         for Index = 1, ButtonCount - 1 do
             local GX = NB.X + Pad + Index * BtnSize + (Index - 1) * BtnGap
             DrawRect(GX, NB.Y + Pad, BtnGap, BtnSize, Theme["Background"])
-        end
-        local ExtraY = NB.Y + Pad + BtnSize
-        local ExtraH = (NB.Y + NB.Height - Pad) - ExtraY
-        if ExtraH > 0 then
-            DrawRect(NB.X + Pad, ExtraY, NB.Width - Pad * 2, ExtraH, Theme["Background"])
-        end
-        for Index = Slot, #DockSquares do
-            local Obj = DockSquares[Index]
-            if Obj then
-                pcall(function()
-                    Obj.Visible = false
-                end)
-            end
         end
     end
 
@@ -680,16 +638,15 @@ local Library do
         Input.MouseX = ((Mouse and (Mouse.X or Mouse.x)) or 0) * Scale
         Input.MouseY = ((Mouse and (Mouse.Y or Mouse.y)) or 0) * Scale
 
-        local LeftDown = false
-        local RightDown = false
-        if type(isleftpressed) == "function" then
-            local OkLeft, Left = pcall(isleftpressed)
-            LeftDown = OkLeft and Left == true
+        local function Pressed(Fn)
+            if type(Fn) ~= "function" then
+                return false
+            end
+            local Ok, Value = pcall(Fn)
+            return Ok and (Value == true or Value == "true")
         end
-        if type(isrightpressed) == "function" then
-            local OkRight, Right = pcall(isrightpressed)
-            RightDown = OkRight and Right == true
-        end
+        local LeftDown = Pressed(isleftpressed)
+        local RightDown = Pressed(isrightpressed)
         Input.MouseClicked = LeftDown and not Input.MousePrevious
         Input.RightClicked = RightDown and not Input.RightPrevious
         Input.MouseDown = LeftDown
@@ -1954,14 +1911,13 @@ local Library do
             end
         end
 
-        -- Close an open dropdown if the click lands outside it.
+        -- A click on the open list is claimed here so the row underneath cannot take it.
+        -- The list itself still selects, because that handler does not look at Consumed.
+        -- Closing happens after the list handles the click.
         if Library.LastDropdownRect and Library.ActiveDropdown and Library.ActiveDropdown.Open and Library.Input.MouseClicked then
             local Rect = Library.LastDropdownRect
             if Library:IsHovering(Rect[1], Rect[2], Rect[3], Rect[4]) then
                 Library.Input.Consumed = true
-            elseif not Library:IsHovering(Rect[5], Rect[6], Rect[7], Rect[8]) then
-                Library.ActiveDropdown.Open = false
-                Library.ActiveDropdown = nil
             end
         end
 
