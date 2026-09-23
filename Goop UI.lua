@@ -169,7 +169,7 @@ local Library do
         end
     end
 
-    LoadFonts()
+    pcall(LoadFonts)
 
     Library.FontSize = 13
     Library.Font = Library.Fonts.Data.Fonts["Verdana"] and "Verdana" or Library.Fonts.Data.List[1]
@@ -214,7 +214,7 @@ local Library do
         end
     end
 
-    LoadIcons()
+    pcall(LoadIcons)
 
     -- // Core \\ --
     -- Mouse and keyboard stay off RunService.Render. That event only draws.
@@ -2016,7 +2016,12 @@ local Library do
 
         Library.Windows[#Library.Windows + 1] = Window
 
-        RunService.PostLocal:Connect(function()
+        local KeySignal
+        pcall(function()
+            KeySignal = RunService.PostLocal or RunService.PreLocal
+        end)
+        if KeySignal then
+        KeySignal:Connect(function()
             local PressedKeys = getpressedkeys() or { }
             local function IsKeyPressed(Target) return TableFind(PressedKeys, Target) ~= nil end
 
@@ -2097,6 +2102,7 @@ local Library do
                 end
             end
         end)
+        end
 
         return Window
     end
@@ -3019,7 +3025,29 @@ local Library do
     Library.WindowSnapping = true
     Library.SnapGuides = nil
 
-    local RenderConnection = RunService.Render:Connect(function()
+    local function ReadSignal(Name)
+        if RunService == nil then
+            return nil
+        end
+        local Ok, Signal = pcall(function()
+            return RunService[Name]
+        end)
+        if not Ok or Signal == nil then
+            return nil
+        end
+        local HasConnect = false
+        pcall(function()
+            HasConnect = type(Signal.Connect) == "function"
+        end)
+        if HasConnect then
+            return Signal
+        end
+    end
+
+    local RenderConnection
+    local RenderSignal = ReadSignal("Render")
+    if RenderSignal then
+    RenderConnection = RenderSignal:Connect(function()
         local Measures = ReadyMeasures
         local MeasureTotal = ReadyMeasureCount
         for Index = 1, MeasureTotal do
@@ -3067,9 +3095,12 @@ local Library do
             end
         end
     end)
+    end
 
-    local FrameSignal = RunService.Script or RunService.Extra or RunService.PreLocal
-    local FrameConnection = FrameSignal:Connect(function()
+    local FrameConnection
+    local FrameSignal = ReadSignal("Script") or ReadSignal("Extra") or ReadSignal("PreLocal")
+    if FrameSignal then
+    FrameConnection = FrameSignal:Connect(function()
         InFrame = false
         Library:UpdateInput()
         Library.Input.Consumed = false
@@ -3179,6 +3210,7 @@ local Library do
         end
         SetWindowBlocked(MenuOpen)
     end)
+    end
 
     function Library:Unload()
         if type(RenderConnection) == "function" then
