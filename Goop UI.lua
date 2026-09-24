@@ -872,6 +872,20 @@ local Library do
         end
     end
 
+    local function RenderElement(Element)
+        local Drop = Library.DropdownOverlay
+        if Drop and Drop.Element and Element ~= Drop.Element then
+            local Rows = MathMin(#(Drop.Element.Options or {}), 8)
+            local ListH = Rows * 20
+            local X, Y = Element.X or 0, Element.Y or 0
+            local W, H = Element.Width or 0, Element.Height or 0
+            if X < Drop.X + Drop.Width and X + W > Drop.X and Y < Drop.Y + ListH and Y + H > Drop.Y then
+                return
+            end
+        end
+        Element:Render()
+    end
+
     -- // Sections \\ --
     -- Each element is built by a self-contained factory below: it owns its state,
     -- its :Render (drawing + input + flag), and any attach methods. The Section
@@ -1390,20 +1404,6 @@ local Library do
     local Pages = { }
     Pages.__index = Pages
     Library.Pages = Pages
-
-    local function RenderElement(Element)
-        local Drop = Library.DropdownOverlay
-        if Drop and Drop.Element and Element ~= Drop.Element then
-            local Rows = MathMin(#(Drop.Element.Options or {}), 8)
-            local ListH = Rows * 20
-            local X, Y = Element.X or 0, Element.Y or 0
-            local W, H = Element.Width or 0, Element.Height or 0
-            if X < Drop.X + Drop.Width and X + W > Drop.X and Y < Drop.Y + ListH and Y + H > Drop.Y then
-                return
-            end
-        end
-        Element:Render()
-    end
 
     local function CreateSection(Page, Data)
         local Section = setmetatable({
