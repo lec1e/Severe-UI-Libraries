@@ -252,6 +252,10 @@ local Library do
     local BuildTextCount, ReadyTextCount = 0, 0
     local BuildMeasureCount, ReadyMeasureCount = 0, 0
     local BuildIconCount, ReadyIconCount = 0, 0
+    local BuildOverlayRects, ReadyOverlayRects = {}, {}
+    local BuildOverlayTexts, ReadyOverlayTexts = {}, {}
+    local BuildOverlayRectCount, ReadyOverlayRectCount = 0, 0
+    local BuildOverlayTextCount, ReadyOverlayTextCount = 0, 0
     local IconDrawings = {}
     local PreparedIcons = {}
     local WindowBlocked = false
@@ -284,6 +288,9 @@ local Library do
         BuildTextCount = 0
         BuildMeasureCount = 0
         BuildIconCount = 0
+        BuildOverlayRectCount = 0
+        BuildOverlayTextCount = 0
+        Library.OverlayPass = false
     end
 
     local function PublishFrame()
@@ -295,6 +302,10 @@ local Library do
         ReadyMeasureCount = BuildMeasureCount
         ReadyIcons, BuildIcons = BuildIcons, ReadyIcons
         ReadyIconCount = BuildIconCount
+        ReadyOverlayRects, BuildOverlayRects = BuildOverlayRects, ReadyOverlayRects
+        ReadyOverlayRectCount = BuildOverlayRectCount
+        ReadyOverlayTexts, BuildOverlayTexts = BuildOverlayTexts, ReadyOverlayTexts
+        ReadyOverlayTextCount = BuildOverlayTextCount
     end
 
     local function SetWindowBlocked(_)
@@ -1368,7 +1379,7 @@ local Library do
                 end
                 Element.X, Element.Y, Element.Width = CursorX, CursorY, InnerWidth
                 Element.SectionRightEdge = SectionRightEdge
-                Element:Render()
+                RenderElement(Element)
                 CursorY = CursorY + Element.Height
             end
         end
@@ -1379,6 +1390,20 @@ local Library do
     local Pages = { }
     Pages.__index = Pages
     Library.Pages = Pages
+
+    local function RenderElement(Element)
+        local Drop = Library.DropdownOverlay
+        if Drop and Drop.Element and Element ~= Drop.Element then
+            local Rows = MathMin(#(Drop.Element.Options or {}), 8)
+            local ListH = Rows * 20
+            local X, Y = Element.X or 0, Element.Y or 0
+            local W, H = Element.Width or 0, Element.Height or 0
+            if X < Drop.X + Drop.Width and X + W > Drop.X and Y < Drop.Y + ListH and Y + H > Drop.Y then
+                return
+            end
+        end
+        Element:Render()
+    end
 
     local function CreateSection(Page, Data)
         local Section = setmetatable({
@@ -1470,7 +1495,7 @@ local Library do
                     if CursorY >= ContentTop and CursorY + Element.Height <= ContentBottom then
                         Element.X, Element.Y, Element.Width = CursorX, CursorY, InnerWidth
                         Element.SectionRightEdge = SectionRightEdge
-                        Element:Render()
+                        RenderElement(Element)
                     end
                     CursorY = CursorY + Element.Height
                 end
@@ -1621,7 +1646,7 @@ local Library do
                     end
                     Element.X, Element.Y, Element.Width = CursorX, CursorY, InnerWidth
                     Element.SectionRightEdge = SectionRightEdge
-                    Element:Render()
+                    RenderElement(Element)
                     CursorY = CursorY + Element.Height
                 end
             end
@@ -2016,7 +2041,7 @@ local Library do
             end
         end
 
-        -- Dropdown overlay (drawn above everything else on this window).
+        -- Dropdown overlay is flushed after every other label, so rows underneath cannot show through.
         if Library.DropdownOverlay then
             local Overlay = Library.DropdownOverlay
             local Element = Overlay.Element
