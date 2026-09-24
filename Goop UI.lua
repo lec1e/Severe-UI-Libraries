@@ -471,6 +471,15 @@ local Library do
         HideDock()
         local NB = Library.NavigationBarData
         if not NB or Library.MasterVisible ~= true then
+            if NB then
+                for _, Btn in NB.Buttons do
+                    if Btn._Icon then
+                        pcall(function()
+                            Btn._Icon.Visible = false
+                        end)
+                    end
+                end
+            end
             return
         end
         local BtnSize, BtnGap, Pad = 28, 3, 6
@@ -497,9 +506,31 @@ local Library do
             local Hovered = Library:IsHovering(BX, BY, BtnSize, BtnSize) and not Library.Input.Consumed
             local Fill = Active and Theme["Accent"] or (Hovered and Theme["Dark Background"] or Theme["Background"])
             local Edge = Active and Theme["Accent"] or Theme["Border"]
-            DrawRect(BX, BY, BtnSize, BtnSize, Fill)
-            Frame(BX, BY, BtnSize, BtnSize, 2, Edge)
-            DockGlyph(Index, BX + 6, BY + 6, Theme["White"], Fill)
+            DrawRect(BX + 1, BY + 1, BtnSize - 2, BtnSize - 2, Fill)
+            Frame(BX, BY, BtnSize, BtnSize, 1, Edge)
+            local IconName = ({ "Home", "Style", "Config" })[Index]
+            local Raw = IconName and Library.Icons[IconName]
+            local Img = Btn._Icon
+            if Img == nil and type(Raw) == "string" and #Raw > 24 and string.byte(Raw, 1) == 137 then
+                Img = CreateImage()
+                Btn._Icon = Img or false
+                if Img then
+                    pcall(function()
+                        Img.Data = Raw
+                    end)
+                end
+            end
+            if Img then
+                pcall(function()
+                    Img.Visible = true
+                    Img.Transparency = 0
+                    Img.Opacity = 1
+                    Img.ZIndex = 26000 + Index
+                    Img.Position = vector.create(BX + 6, BY + 6)
+                    Img.Size = vector.create(16, 16)
+                    Img.Color = AsColor(Theme["White"])
+                end)
+            end
             if Library.Input.MouseClicked and Hovered and Btn.Window then
                 Library.Input.Consumed = true
                 Btn.Window.Visible = not Btn.Window.Visible
@@ -663,6 +694,12 @@ local Library do
         Input.MouseDown = LeftDown
         Input.MousePrevious = LeftDown
         Input.RightPrevious = RightDown
+        local Wheel = 0
+        if type(Library.Input.WheelPending) == "number" then
+            Wheel = Library.Input.WheelPending
+            Library.Input.WheelPending = 0
+        end
+        Input.Wheel = Wheel
     end
 
     function Library:IsHovering(X, Y, Width, Height)
@@ -2056,6 +2093,15 @@ local Library do
             local Scrollable = OverflowRows > 0
 
             Element.DropScrollRow = MathClamp(Element.DropScrollRow or 0, 0, OverflowRows)
+            if Scrollable and (Library.Input.Wheel or 0) ~= 0 and Library:IsHovering(OX, OY, OW, ViewHeight) then
+                local Step = Library.Input.Wheel > 0 and -1 or 1
+                local Ticks = math.abs(Library.Input.Wheel)
+                if Ticks < 1 then
+                    Ticks = 1
+                end
+                Element.DropScrollRow = MathClamp(Element.DropScrollRow + Step * math.floor(Ticks), 0, OverflowRows)
+                Library.Input.Wheel = 0
+            end
 
             Library.LastDropdownRect = {
                 OX, OY, OW, ViewHeight,
@@ -3294,6 +3340,32 @@ local Library do
         end
 
         InFrame = true
+
+        pcall(function()
+            if Library.WheelHooked then
+                return
+            end
+            Library.WheelHooked = true
+            local Service = game:GetService("UserInputService")
+            Service.InputChanged:Connect(function(Input)
+                local Kind = Input and Input.UserInputType
+                local Name = Kind and (Kind.Name or tostring(Kind)) or ""
+                if string.find(Name, "Wheel", 1, true) then
+                    local Delta = 0
+                    pcall(function()
+                        Delta = Input.Position.Z
+                    end)
+                    if Delta == 0 then
+                        pcall(function()
+                            Delta = Input.Position.Y
+                        end)
+                    end
+                    if Delta ~= 0 then
+                        Library.Input.WheelPending = (Library.Input.WheelPending or 0) + Delta
+                    end
+                end
+            end)
+        end)
 
         local MenuKey = MainWin.MenuToggleKey or "RightShift"
         local OkKeys, PressedKeys = pcall(getpressedkeys)
